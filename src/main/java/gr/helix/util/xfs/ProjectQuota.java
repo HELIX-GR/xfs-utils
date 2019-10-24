@@ -4,10 +4,13 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -15,7 +18,9 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Validate;
+import org.apache.commons.text.StringEscapeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +31,113 @@ public class ProjectQuota
     private static final long COMMAND_TIMEOUT_IN_SECONDS = 2; 
     
     /**
+     * Parse a line of output of <tt>report</tt> subcommand.
+     */
+    private static class ReportLineParser implements Function<String, ProjectInfo>
+    {
+        private static final Pattern projectIdPattern = Pattern.compile("^[#](\\d+)$");
+        
+        private final Map<Integer, Project> knownProjects;
+        
+        public ReportLineParser(Map<Integer, Project> projects)
+        {
+            this.knownProjects = projects;
+        }
+        
+        @Override
+        public ProjectInfo apply(String line)
+        {
+            String[] parts =  line.split("\\s+", 5);
+            if (parts.length != 5)
+                return null;
+            
+            Matcher projectIdMatcher = projectIdPattern.matcher(parts[0]);
+            if (!projectIdMatcher.matches())
+                return null;
+            
+            Integer projectId = Integer.parseInt(projectIdMatcher.group(1));;
+            Project project = knownProjects.get(projectId);
+            Validate.validState(project != null, "This project ID is unknown: %s", projectId);
+            
+            ProjectInfo projectInfo = new ProjectInfo(project);
+            projectInfo.setUsedSpace(Integer.parseInt(parts[1]));
+            projectInfo.setSoftLimitForSpace( Integer.parseInt(parts[2]));
+            projectInfo.setHardLimitForSpace(Integer.parseInt(parts[3]));
+            return projectInfo;
+        }
+    }
+    
+    /**
+     * Parse a line of output of <tt>print</tt> subcommand.
+     */
+    private static class PrintLineParser implements Function<String, Project>
+    {
+        private static final Pattern projectIdAndNamePattern = Pattern.compile("^[(]project\\s+(\\d+),\\s*(\\w+)[)]$");
+
+        private final Path mountpoint;
+        
+        public PrintLineParser(Path mountpoint)
+        {
+            this.mountpoint = mountpoint;
+        }
+
+        @Override
+        public Project apply(String line)
+        {
+            String[] parts = line.split("\\s+", 3);
+            if (parts.length != 3)
+                return null;
+            
+            Path path = Paths.get(parts[0]);
+            Matcher projectIdMatcher = projectIdAndNamePattern.matcher(parts[2]);
+            if (!projectIdMatcher.matches())
+                return null;
+            
+            Integer projectId = Integer.parseInt(projectIdMatcher.group(1));
+            String projectName = projectIdMatcher.group(2);
+            return Project.of(projectId, projectName, path, mountpoint);
+        }
+    }
+
+    /**
+     * Parse a line of output of <tt>quota</tt> subcommand.
+     */
+    private static class QuotaLineParser implements Function<String, ProjectInfo>
+    {
+        private final Project project;
+
+        public QuotaLineParser(Project project)
+        {
+            this.project = project;
+        }
+
+        @Override
+        public ProjectInfo apply(String line)
+        {
+            if (line.isEmpty())
+                return null;
+            
+            String[] parts = line.split("\\s+", 5);
+            if (parts.length != 5)
+                return null;
+            
+            ProjectInfo projectInfo = new ProjectInfo(project);
+            projectInfo.setUsedSpace(Integer.parseInt(parts[1]));
+            projectInfo.setSoftLimitForSpace( Integer.parseInt(parts[2]));
+            projectInfo.setHardLimitForSpace(Integer.parseInt(parts[3]));
+            return projectInfo;
+        }
+    }
+    
+    private static String commandToString(List<String> command)
+    {
+        String commandLine = command.stream()
+            .map(s -> s.indexOf(' ') < 0? s: ('"' + s + '"')) // enclose white-space in quotes
+            .collect(Collectors.joining(" "));
+        return commandLine;
+    }
+        
+    /**
      * List known (not necessarily set-up) projects under a given XFS filesystem
      * 
      * @param mountpoint The mountpoint of the XFS filesystem
@@ -33,59 +145,92 @@ public class ProjectQuota
      * @throws IOException
      * @throws InterruptedException
      */
-    public static Map<Integer, Project> listProjects(Path mountpoint) throws IOException, InterruptedException
+    public static Map<Integer, Project> listProjects(Path mountpoint) 
+        throws IOException, InterruptedException
     {
-        final String listingAsString = executeXfsQuotaCommand("print", mountpoint);
-        
-        final Pattern projectIdAndNamePattern = Pattern.compile("^[(]project\\s+(\\d+),\\s*(\\w+)[)]$");
-        
-        final Function<String, Project> parseLineToProject = (String line) -> {
-            String[] parts = line.split("\\s+", 3);
-            Path path = Paths.get(parts[0]);
-            Matcher projectIdMatcher = projectIdAndNamePattern.matcher(parts[2]);
-            if (!projectIdMatcher.matches())
-                return (Project) null;
-            Integer projectId = Integer.parseInt(projectIdMatcher.group(1));
-            String projectName = projectIdMatcher.group(2);
-            return Project.of(projectId, projectName, path, mountpoint);
-        };
+        final String listingAsString = executeXfsQuotaCommand("print", null, mountpoint);
         
         return Arrays.stream(listingAsString.split("\\R"))
-            .skip(1) // skip header line
+            .skip(1) // skip header
             .map(String::trim)
-            .map(parseLineToProject)
+            .map(new PrintLineParser(mountpoint))
             .filter(Objects::nonNull)
             .collect(Collectors.toMap(Project::projectId, Function.identity()));
     }
     
-    public static Map<Integer, ProjectInfo> reportProjects(Path mountpoint) throws IOException, InterruptedException
+    public static Map<Integer, ProjectInfo> getReport(Path mountpoint) 
+        throws IOException, InterruptedException
     {
         final Map<Integer, Project> knownProjects = listProjects(mountpoint);
         
-        final String reportAsString = executeXfsQuotaCommand("report -pnN", mountpoint);
-        
-        final Pattern projectIdPattern = Pattern.compile("^[#](\\d+)$");
-        
-        final Function<String, ProjectInfo> parseLineToProjectInfo = (String line) -> {
-            String[] parts =  line.split("\\s+", 5);
-            Matcher projectIdMatcher = projectIdPattern.matcher(parts[0]);
-            if (!projectIdMatcher.matches())
-                return null;
-            Integer projectId = Integer.parseInt(projectIdMatcher.group(1));;
-            Project project = knownProjects.get(projectId);
-            Validate.validState(project != null, "This project ID is unknown: %s", projectId);
-            ProjectInfo projectInfo = new ProjectInfo(project);
-            projectInfo.setUsedSpace(Integer.parseInt(parts[1]));
-            projectInfo.setSoftLimitForSpace( Integer.parseInt(parts[2]));
-            projectInfo.setHardLimitForSpace(Integer.parseInt(parts[3]));
-            return projectInfo;
-        };
+        final String reportAsString = executeXfsQuotaCommand("report -pnN", null, mountpoint);
         
         return Arrays.stream(reportAsString.split("\\R"))
             .map(String::trim)
-            .map(parseLineToProjectInfo)
+            .map(new ReportLineParser(knownProjects))
             .filter(Objects::nonNull)
             .collect(Collectors.toMap(projinfo -> projinfo.getProject().projectId(), Function.identity()));
+    }
+    
+    private static Optional<Project> getProjectByNameOrId(String projectIdentifier, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        final String listingAsString = executeXfsQuotaCommand("print", projectIdentifier, mountpoint);
+        
+        return Arrays.stream(listingAsString.split("\\R"))
+            .skip(1) // skip header
+            .map(new PrintLineParser(mountpoint))
+            .filter(Objects::nonNull)
+            .findFirst();
+    }
+    
+    public static Optional<Project> getProjectById(int projectId, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        return getProjectByNameOrId(String.valueOf(projectId), mountpoint);
+    }
+    
+    public static Optional<Project> getProjectByName(String projectName, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        Validate.notBlank(projectName);
+        return getProjectByNameOrId(projectName, mountpoint);
+    }
+    
+    private static Optional<ProjectInfo> getReportForProject1(String projectIdentifier, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        Project project = getProjectByNameOrId(projectIdentifier, mountpoint).orElse(null);
+        return project == null? Optional.empty() : getReportForProject1(project, mountpoint);
+    }
+    
+    private static Optional<ProjectInfo> getReportForProject1(Project project, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        final String quotaAsString = executeXfsQuotaCommand(
+            String.format("quota -N -p %d", project.projectId()), null, mountpoint);
+        
+        return Optional.ofNullable((new QuotaLineParser(project)).apply(quotaAsString));
+    }
+    
+    public static Optional<ProjectInfo> getReportForProject(int projectId, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        return getReportForProject1(String.valueOf(projectId), mountpoint);
+    }
+    
+    public static Optional<ProjectInfo> getReportForProject(String projectName, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        Validate.notBlank(projectName);
+        return getReportForProject1(projectName, mountpoint);
+    }
+    
+    public static Optional<ProjectInfo> getReportForProject(Project project, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        Validate.notNull(project);
+        return getReportForProject1(project, mountpoint);
     }
     
     /**
@@ -142,25 +287,36 @@ public class ProjectQuota
      * Execute an <code>xfs_quota</code> command forking a child process and return its output as
      * a string.
      * 
-     * @param quotaCommand
-     * @param mountpoint
+     * @param quotaCommand An <tt>xfs_quota</tt> command
+     * @param projectIdentifier A project identifier (numeric ID or name) to restrict the scope of the command. 
+     *    It may be <code>null</code>.
+     * @param mountpoint The mountpoint of the XFS filesystem
      * @return the standard output of the command
      * @throws InterruptedException
      * @throws IOException
      * 
      * @see manpage for <code>xfs_quota</code>
      */
-    private static String executeXfsQuotaCommand(String quotaCommand, Path mountpoint) 
+    private static String executeXfsQuotaCommand(String quotaCommand, String projectIdentifier, Path mountpoint) 
         throws InterruptedException, IOException
     {
+        Process process = null;
+        
         final List<String> command = 
-            Arrays.asList("sudo", "xfs_quota", "-x", "-c", quotaCommand, mountpoint.toString());
+            new ArrayList<>(Arrays.asList("sudo", "xfs_quota", "-x", "-c", quotaCommand));
+        if (projectIdentifier != null) {
+            command.add("-d");
+            command.add(projectIdentifier.toString());
+        }
+        command.add(mountpoint.toString());
+            
         final ProcessBuilder processBuilder = new ProcessBuilder(command)
             .redirectErrorStream(false);
         
-        final Process process = processBuilder.start();
-        logger.debug("Spawned process executing `xfs_quota -x -c '{}' {}`: {}", 
-            quotaCommand, mountpoint, process);
+        process = processBuilder.start();
+        if (logger.isDebugEnabled()) {
+            logger.debug("Spawned process executing `{}`: {}", commandToString(command), process);
+        }
         
         final boolean finished = process.waitFor(COMMAND_TIMEOUT_IN_SECONDS, TimeUnit.SECONDS);
         if (!finished) {
@@ -175,8 +331,7 @@ public class ProjectQuota
                 String.format("The `xfs_quota` command has failed: %s", quotaCommand));
         }
         
-        final String stdoutAsString = 
-            IOUtils.toString(process.getInputStream(), Charset.defaultCharset());
+        final String stdoutAsString = IOUtils.toString(process.getInputStream(), Charset.defaultCharset());
         
         return stdoutAsString;
     }
@@ -189,15 +344,23 @@ public class ProjectQuota
     {
         final Path mountpoint = Paths.get("/var/local");
         
-        System.err.println(" -- Projects -- ");
-        for (Map.Entry<Integer, Project> e: listProjects(mountpoint).entrySet()) {
-            System.err.println(e.getKey() + " -> " + e.getValue());
+        Optional<Project> p1 = getProjectByName(args[0], mountpoint);
+        System.err.println(p1);
+        if (p1.isPresent()) {
+            Optional<ProjectInfo> info1 = getReportForProject(p1.get(), mountpoint);
+            System.err.println(info1);
         }
         
-        System.err.println(" -- Project Info -- ");
-        for (Map.Entry<Integer, ProjectInfo> e: reportProjects(mountpoint).entrySet()) {
-            System.err.println(e.getKey() + " -> " + e.getValue());
-        }
+        
+//        System.err.println(" -- Projects -- ");
+//        for (Map.Entry<Integer, Project> e: listProjects(mountpoint).entrySet()) {
+//            System.err.println(e.getKey() + " -> " + e.getValue());
+//        }
+//        
+//        System.err.println(" -- Project Info -- ");
+//        for (Map.Entry<Integer, ProjectInfo> e: getReport(mountpoint).entrySet()) {
+//            System.err.println(e.getKey() + " -> " + e.getValue());
+//        }
         
     }
 }

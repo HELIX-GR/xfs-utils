@@ -108,7 +108,7 @@ public class ProjectInfo
     public String toString()
     {
         return String.format(
-            "ProjectInfo(project=%s, usedSpace=%d, hardLimitForSpace=%d, softLimitForSpace=%d)",
+            "ProjectInfo(project=%s, used=%d, hardLimit=%d, softLimit=%d)",
             project, usedSpace, hardLimitForSpace, softLimitForSpace);
     }
 }

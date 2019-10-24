@@ -11,7 +11,7 @@
   
   <Loggers>
     
-    <Logger name="gr.helix.xfs_utils" level="DEBUG" additivity="true" />
+    <Logger name="gr.helix.util.xfs" level="DEBUG" additivity="true" />
     
     <Root level="INFO">
       <AppenderRef ref="console"/>

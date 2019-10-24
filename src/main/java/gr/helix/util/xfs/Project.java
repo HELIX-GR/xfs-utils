@@ -71,7 +71,7 @@ public class Project
     @Override
     public String toString()
     {
-        return String.format("Project(projectId=%s, projectName=%s, path=%s, mountpoint=%s)",
+        return String.format("Project(id=%s, name=%s, path=%s, mountpoint=%s)",
             projectId, projectName, path, mountpoint);
     }
 }
