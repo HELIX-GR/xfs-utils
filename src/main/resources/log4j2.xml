@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    
+    <Console name="console" target="SYSTEM_ERR">
+      <!--PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %highlight{%-5level} %logger{36} - %msg%n"/>-->
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+    </Console>
+
+  </Appenders>
+  
+  <Loggers>
+    
+    <Logger name="gr.helix.xfs_utils" level="DEBUG" additivity="true" />
+    
+    <Root level="INFO">
+      <AppenderRef ref="console"/>
+    </Root>
+    
+  </Loggers>
+</Configuration>

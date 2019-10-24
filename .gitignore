@@ -1,0 +1,9 @@
+/.project
+/.classpath
+/.settings
+/.factorypath
+
+Scratch*.java
+
+/target/
+/data/
