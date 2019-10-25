@@ -48,12 +48,12 @@ public class Project
         return new Project(projectId, projectName, path, mountpoint);
     }
     
-    public int projectId()
+    public int id()
     {
         return projectId;
     }
     
-    public String projectName()
+    public String name()
     {
         return projectName;
     }
@@ -71,7 +71,6 @@ public class Project
     @Override
     public String toString()
     {
-        return String.format("Project(id=%s, name=%s, path=%s, mountpoint=%s)",
-            projectId, projectName, path, mountpoint);
+        return String.format("Project(id=%s, name=%s, path=%s)", projectId, projectName, path);
     }
 }
