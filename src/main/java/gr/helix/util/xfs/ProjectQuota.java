@@ -12,6 +12,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -66,7 +67,7 @@ public class ProjectQuota
     /**
      * Parse a line of output of <tt>report</tt> subcommand.
      */
-    private static class ReportLineParser implements Function<String, ProjectInfo>
+    private static class ReportLineParser implements Function<String, ProjectReport>
     {
         private static final Pattern projectIdPattern = Pattern.compile("^[#](\\d+)$");
         
@@ -78,7 +79,7 @@ public class ProjectQuota
         }
         
         @Override
-        public ProjectInfo apply(String line)
+        public ProjectReport apply(String line)
         {
             String[] parts =  line.split("\\s+", 5);
             if (parts.length != 5)
@@ -92,11 +93,11 @@ public class ProjectQuota
             Project project = knownProjects.get(projectId);
             Validate.validState(project != null, "This project ID is unknown: %s", projectId);
             
-            ProjectInfo projectInfo = new ProjectInfo(project);
-            projectInfo.setUsedSpace(Integer.parseInt(parts[1]));
-            projectInfo.setSoftLimitForSpace(Integer.parseInt(parts[2]));
-            projectInfo.setHardLimitForSpace(Integer.parseInt(parts[3]));
-            return projectInfo;
+            ProjectReport projectReport = new ProjectReport(project);
+            projectReport.setUsedSpace(Integer.parseInt(parts[1]));
+            projectReport.setSoftLimitForSpace(Integer.parseInt(parts[2]));
+            projectReport.setHardLimitForSpace(Integer.parseInt(parts[3]));
+            return projectReport;
         }
     }
     
@@ -133,19 +134,19 @@ public class ProjectQuota
     }
 
     /**
-     * Parse a line of output of <tt>quota</tt> subcommand.
+     * Parse a line of output of <tt>quota -b -v -p PROJID</tt> subcommand.
      */
-    private static class QuotaLineParser implements Function<String, ProjectInfo>
+    private static class BlockQuotaLineParser implements Function<String, ProjectReport>
     {
         private final Project project;
 
-        public QuotaLineParser(Project project)
+        public BlockQuotaLineParser(Project project)
         {
             this.project = project;
         }
 
         @Override
-        public ProjectInfo apply(String line)
+        public ProjectReport apply(String line)
         {
             if (line.isEmpty())
                 return null;
@@ -154,11 +155,11 @@ public class ProjectQuota
             if (parts.length != 5)
                 return null;
             
-            ProjectInfo projectInfo = new ProjectInfo(project);
-            projectInfo.setUsedSpace(Integer.parseInt(parts[1]));
-            projectInfo.setSoftLimitForSpace( Integer.parseInt(parts[2]));
-            projectInfo.setHardLimitForSpace(Integer.parseInt(parts[3]));
-            return projectInfo;
+            ProjectReport projectReport = new ProjectReport(project);
+            projectReport.setUsedSpace(Integer.parseInt(parts[1]));
+            projectReport.setSoftLimitForSpace( Integer.parseInt(parts[2]));
+            projectReport.setHardLimitForSpace(Integer.parseInt(parts[3]));
+            return projectReport;
         }
     }
     
@@ -295,20 +296,21 @@ public class ProjectQuota
             .findFirst();
     }
     
-    private static Optional<ProjectInfo> getReportForProject1(String projectIdentifier, Path mountpoint) 
+    private static Optional<ProjectReport> getReportForProject1(String projectIdentifier, Path mountpoint) 
         throws InterruptedException, IOException
     {
         Project project = findProjectByNameOrId(projectIdentifier, mountpoint).orElse(null);
         return project == null? Optional.empty() : getReportForProject1(project);
     }
     
-    private static Optional<ProjectInfo> getReportForProject1(Project project) 
+    private static Optional<ProjectReport> getReportForProject1(Project project) 
         throws InterruptedException, IOException
     {
+        // Get the quota report for blocks
         final String quotaAsString = executeQuotaCommand(
-            String.format("quota -v -N -p %d", project.id()), null, project.mountpoint());
+            String.format("quota -b -v -N -p %d", project.id()), null, project.mountpoint());
         
-        return Optional.ofNullable((new QuotaLineParser(project)).apply(quotaAsString));
+        return Optional.ofNullable((new BlockQuotaLineParser(project)).apply(quotaAsString));
     }
     
     private static void setupProject1(Project project)
@@ -375,7 +377,7 @@ public class ProjectQuota
             .collect(Collectors.toMap(Project::id, Function.identity()));
     }
     
-    public static Map<Integer, ProjectInfo> getReport(Path mountpoint) 
+    public static Map<Integer, ProjectReport> getReport(Path mountpoint) 
         throws IOException, InterruptedException
     {
         final Map<Integer, Project> knownProjects = listProjects(mountpoint);
@@ -402,20 +404,20 @@ public class ProjectQuota
         return findProjectByNameOrId(projectName, mountpoint);
     }
         
-    public static Optional<ProjectInfo> getReportForProject(int projectId, Path mountpoint) 
+    public static Optional<ProjectReport> getReportForProject(int projectId, Path mountpoint) 
         throws InterruptedException, IOException
     {
         return getReportForProject1(String.valueOf(projectId), mountpoint);
     }
     
-    public static Optional<ProjectInfo> getReportForProject(String projectName, Path mountpoint) 
+    public static Optional<ProjectReport> getReportForProject(String projectName, Path mountpoint) 
         throws InterruptedException, IOException
     {
         Validate.notBlank(projectName);
         return getReportForProject1(projectName, mountpoint);
     }
     
-    public static Optional<ProjectInfo> getReportForProject(Project project) 
+    public static Optional<ProjectReport> getReportForProject(Project project) 
         throws InterruptedException, IOException
     {
         Validate.notNull(project);
@@ -454,11 +456,19 @@ public class ProjectQuota
         }
         
         // Setup
-        // Note: We consider a project as set-up if it outputs a quota report
+        // Note: We consider a project as set-up if it outputs a quota report of non-zero usage
         
-        if (!getReportForProject1(project).isPresent()) {
+        ProjectReport projectReport = getReportForProject1(project).orElse(null);
+        Validate.validState(projectReport == null || projectReport.getUsedSpace() != null, 
+            "The report is expected to have a non-null value for usedSpace");
+        if (projectReport == null || projectReport.getUsedSpace() == 0) {
             setupProject1(project);
         }
+    }
+    
+    public static void setupProjects(Collection<Project> projectsToSetup)
+    {
+        // Todo
     }
     
     /**
@@ -491,6 +501,11 @@ public class ProjectQuota
             // Remove relevant definitions from /etc/{projects,projid}
             editDefinition(ProjectQuota::deregisterProject, projectToCleanup);
         }
+    }
+    
+    public static void cleanupProjects(Collection<Project> projectsToSetup)
+    {
+        // Todo
     }
     
     /**
@@ -597,7 +612,7 @@ public class ProjectQuota
         Optional<Project> p1 = findProjectByName(args[0], mountpoint);
         System.err.println(p1);
         if (p1.isPresent()) {
-            Optional<ProjectInfo> info1 = getReportForProject(p1.get());
+            Optional<ProjectReport> info1 = getReportForProject(p1.get());
             System.err.println(info1);
         }
 
@@ -608,14 +623,6 @@ public class ProjectQuota
         
         //setupProject(p1);
         //cleanupProject(p1);
-        
-        if (p1.isPresent()) {
-            Project p1a = p1.get();
-            System.err.println("Setting quota for " + p1a);
-            setQuotaForSpace(p1a, 3072, 4096);
-            System.err.println(getReportForProject(p1a));
-        }
-        
         
 //        System.err.println(" -- Projects -- ");
 //        for (Map.Entry<Integer, Project> e: listProjects(mountpoint).entrySet()) {

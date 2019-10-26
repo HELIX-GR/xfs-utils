@@ -1,40 +1,54 @@
 package gr.helix.util.xfs;
 
-public class ProjectInfo
+public class ProjectReport
 {
     private final Project project;
 
     /**
-     * The space used (in Kbytes)
+     * The space used (in 1K blocks).
+     * 
+     * <p>Note that a zero value may indicate either that the project is not set-up or that has 
+     * it has not allocated a disk block (yet).
      */
     private Integer usedSpace;
     
     /**
-     * The hard-limit for space (in Kbytes)
+     * The hard-limit for space (in 1K blocks).
+     * 
+     * <p>A zero value may indicate either that the project is not set-up or that a limit
+     * is not defined (yet).
      */
     private Integer hardLimitForSpace;
     
     /**
-     * The soft-limit for space (in Kbytes)
+     * The soft-limit for space (in 1K blocks).
+     * <p>See note on zeros at {@link ProjectReport#hardLimitForSpace}
      */
     private Integer softLimitForSpace;
     
     /**
-     * The number of inodes used
+     * The number of inodes used (i.e the number of files).
+     * 
+     * <p>A zero value indicates that the project is not set-up (otherwise at least 1 inode is 
+     * used for the root directory of the project).
      */
     private Integer usedInodes;
     
     /**
-     * The hard-limit for the number of inodes
+     * The hard-limit for the number of inodes (i.e the number of files).
+     * 
+     * <p>See note on zeros at {@link ProjectReport#hardLimitForSpace}
      */
     private Integer hardLimitForInodes;
     
     /**
-     * The soft-limit for the number of inodes
+     * The soft-limit for the number of inodes (i.e the number of files).
+     * 
+     * <p>See note on zeros at {@link ProjectReport#hardLimitForSpace}
      */
     private Integer softLimitForInodes;
     
-    public ProjectInfo(Project project)
+    public ProjectReport(Project project)
     {
         this.project = project;
     }
@@ -78,6 +92,11 @@ public class ProjectInfo
     {
         return usedInodes;
     }
+    
+    public Integer getNumberOfFiles()
+    {
+        return usedInodes;
+    }
 
     public void setUsedInodes(Integer usedInodes)
     {
@@ -108,7 +127,7 @@ public class ProjectInfo
     public String toString()
     {
         return String.format(
-            "ProjectInfo(project=%s, used=%d, hardLimit=%d, softLimit=%d)",
-            project, usedSpace, hardLimitForSpace, softLimitForSpace);
+            "ProjectReport(project=#%d, used=%dK, hardLimit=%dK, softLimit=%dK)",
+            project.id(), usedSpace, hardLimitForSpace, softLimitForSpace);
     }
 }
