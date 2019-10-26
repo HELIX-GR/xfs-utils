@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -13,23 +14,18 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BinaryOperator;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.Validate;
 import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
@@ -414,6 +410,18 @@ public class ProjectQuota
             "The project %s is not setup! must set it up first before applying quota", project);
     }
     
+    private static String listProjects1(Path mountpoint)
+        throws InterruptedException, IOException
+    {
+        return executeQuotaCommand("print", null, mountpoint);
+    }
+    
+    private static String getReport1(Path mountpoint)
+        throws InterruptedException, IOException
+    {
+        return executeQuotaCommand("report -p -n -N", null, mountpoint);
+    }
+    
     /**
      * Execute an <code>xfs_quota</code> command forking a child process and return its output as
      * a string.
@@ -471,14 +479,13 @@ public class ProjectQuota
      * List known (not necessarily set-up) projects under a given XFS filesystem
      * 
      * @param mountpoint The mountpoint of the XFS filesystem
-     * @return
      * @throws IOException
      * @throws InterruptedException
      */
     public static Map<Integer, Project> listProjects(Path mountpoint) 
         throws IOException, InterruptedException
     {
-        final String listingAsString = executeQuotaCommand("print", null, mountpoint);
+        final String listingAsString = listProjects1(mountpoint);
         
         return Arrays.stream(listingAsString.split("\\R"))
             .skip(1) // skip header
@@ -488,18 +495,25 @@ public class ProjectQuota
             .collect(Collectors.toMap(Project::id, Function.identity()));
     }
     
+    /**
+     * Get a usage report for all set-up projects under a given XFS filesystem
+     * 
+     * @param mountpoint The mountpoint of the XFS filesystem
+     * @throws IOException
+     * @throws InterruptedException
+     */
     public static Map<Integer, ProjectReport> getReport(Path mountpoint) 
         throws IOException, InterruptedException
     {
         final Map<Integer, Project> knownProjects = listProjects(mountpoint);
         
-        final String reportAsString = executeQuotaCommand("report -pnN", null, mountpoint);
+        final String reportAsString = getReport1(mountpoint);
         
         return Arrays.stream(reportAsString.split("\\R"))
             .map(String::trim)
             .map(new ReportLineParser(knownProjects))
             .filter(Objects::nonNull)
-            .collect(Collectors.toMap(projinfo -> projinfo.getProject().id(), Function.identity()));
+            .collect(Collectors.toMap(r -> r.getProject().id(), Function.identity()));
     }
     
     public static Optional<Project> findProjectById(int projectId, Path mountpoint) 
@@ -536,7 +550,7 @@ public class ProjectQuota
     }
     
     /**
-     * Setup the project: enable accounting and quota enforcement. If the project is unknown, it
+     * Setup project: enable accounting and quota enforcement. If the project is unknown, it
      * registers under <code>/etc/projects</code>. If the project is known and already set-up, 
      * nothing happens.
      * 
@@ -550,10 +564,10 @@ public class ProjectQuota
         Validate.notNull(projectToSetup);
         
         final Path mountpoint = projectToSetup.mountpoint();
-        Validate.validState(Files.isDirectory(mountpoint), "The mountpoint is not a directory!");
+        Validate.isTrue(Files.isDirectory(mountpoint), "The mountpoint is not a directory!");
         
         final Path path = projectToSetup.path();
-        Validate.validState(Files.isDirectory(path), 
+        Validate.isTrue(Files.isDirectory(path), 
             "The project\'s root directory does not exist: %s", path);
         
         // Register
@@ -561,9 +575,10 @@ public class ProjectQuota
         Project project = findProjectById(projectToSetup.id(), mountpoint).orElse(null);
         if (project == null) {
             // The project is not registered under /etc/projects
-            editDefinition(ProjectQuota::registerProject, projectToSetup);
-            project = findProjectById(projectToSetup.id(), mountpoint).get();
-            
+            // Fixme!! editDefinition(ProjectQuota::registerProject, projectToSetup);
+            project = findProjectById(projectToSetup.id(), mountpoint).get();   
+        } else {
+            // Todo
         }
         
         // Setup
@@ -571,14 +586,65 @@ public class ProjectQuota
         
         ProjectReport projectReport = getReportForProject1(project).orElse(null);
         Validate.validState(projectReport == null || projectReport.getUsedBlocks() != null, 
-            "The report is expected to have a non-null value for usedSpace");
+            "The report is expected to have a non-null value for usedBlocks");
         if (projectReport == null || projectReport.getUsedBlocks() == 0) {
             setupProject1(project);
         }
     }
     
-    public static void setupProjects(Collection<Project> projectsToSetup)
+    /**
+     * Setup a collection of projects.
+     * 
+     * @param projectsToSetup A collection of project descriptors. All projects must be under
+     *   the same mountpoint (i.e same XFS filesystem).
+     * @throws InterruptedException 
+     * @throws IOException 
+     * 
+     * @see ProjectQuota#setupProject(Project)
+     */
+    public static void setupProjects(Collection<Project> projectsToSetup) 
+        throws IOException, InterruptedException
     {
+        Validate.notNull(projectsToSetup);
+        Validate.noNullElements(projectsToSetup);
+        Validate.notEmpty(projectsToSetup);
+        
+        final List<Path> mountpoints = projectsToSetup.stream().map(Project::mountpoint)
+            .distinct()
+            .collect(Collectors.toList());
+        Validate.isTrue(mountpoints.size() == 1, "All projects must be under a single mountpoint!");
+        final Path mountpoint = mountpoints.get(0);
+        Validate.isTrue(Files.isDirectory(mountpoint, LinkOption.NOFOLLOW_LINKS), 
+            "The mountpoint is not a directory!: %s", mountpoint);
+        
+        Optional<Path> nonExistentPath = projectsToSetup.stream().map(Project::path)
+            .filter(f -> !Files.isDirectory(f)).findFirst();
+        Validate.isTrue(!nonExistentPath.isPresent(), 
+            "A project\'s root directory does not exist (or is not a directory): %s", nonExistentPath);
+        
+        // Register
+        
+        final Map<Integer, Project> knownProjects = listProjects(mountpoint);
+        
+        final Optional<Project> mismatchingProject = projectsToSetup.stream()
+            .map(p -> Pair.of(p, knownProjects.get(p.id())))
+            .filter(t -> t.getRight() != null)
+            .filter(t -> !t.getLeft().name().equals(t.getRight().name()) || 
+                !t.getLeft().path().equals(t.getRight().path()))
+            .map(Pair::getLeft)
+            .findFirst();
+        Validate.isTrue(!mismatchingProject.isPresent(), 
+            "A project is redefined with a different name or path: %s", mismatchingProject);
+        
+        final List<Project> unknownProjects = projectsToSetup.stream()
+            .filter(p -> !knownProjects.containsKey(p.id()))
+            .collect(Collectors.toList());
+        if (!unknownProjects.isEmpty()) {
+            
+        }
+        
+        // Setup
+        
         // Todo
     }
     
@@ -615,6 +681,7 @@ public class ProjectQuota
     }
     
     public static void cleanupProjects(Collection<Project> projectsToSetup)
+        throws InterruptedException, IOException
     {
         // Todo
     }
