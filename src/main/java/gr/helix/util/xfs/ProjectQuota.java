@@ -94,9 +94,9 @@ public class ProjectQuota
             Validate.validState(project != null, "This project ID is unknown: %s", projectId);
             
             ProjectReport projectReport = new ProjectReport(project);
-            projectReport.setUsedSpace(Integer.parseInt(parts[1]));
-            projectReport.setSoftLimitForSpace(Integer.parseInt(parts[2]));
-            projectReport.setHardLimitForSpace(Integer.parseInt(parts[3]));
+            projectReport.usedBlocks = Integer.parseInt(parts[1]);
+            projectReport.softLimitForBlocks = Integer.parseInt(parts[2]);
+            projectReport.hardLimitForBlocks = Integer.parseInt(parts[3]);
             return projectReport;
         }
     }
@@ -136,11 +136,11 @@ public class ProjectQuota
     /**
      * Parse a line of output of <tt>quota -b -v -p PROJID</tt> subcommand.
      */
-    private static class BlockQuotaLineParser implements Function<String, ProjectReport>
+    private static class QuotaForBlocksLineParser implements Function<String, ProjectReport>
     {
         private final Project project;
 
-        public BlockQuotaLineParser(Project project)
+        public QuotaForBlocksLineParser(Project project)
         {
             this.project = project;
         }
@@ -156,9 +156,39 @@ public class ProjectQuota
                 return null;
             
             ProjectReport projectReport = new ProjectReport(project);
-            projectReport.setUsedSpace(Integer.parseInt(parts[1]));
-            projectReport.setSoftLimitForSpace( Integer.parseInt(parts[2]));
-            projectReport.setHardLimitForSpace(Integer.parseInt(parts[3]));
+            projectReport.usedBlocks = Integer.parseInt(parts[1]);
+            projectReport.softLimitForBlocks = Integer.parseInt(parts[2]);
+            projectReport.hardLimitForBlocks = Integer.parseInt(parts[3]);
+            return projectReport;
+        }
+    }
+    
+    /**
+     * Parse a line of output of <tt>quota -i -v -p PROJID</tt> subcommand.
+     */
+    private static class QuotaForInodesLineParser implements Function<String, ProjectReport>
+    {
+        private final Project project;
+
+        public QuotaForInodesLineParser(Project project)
+        {
+            this.project = project;
+        }
+
+        @Override
+        public ProjectReport apply(String line)
+        {
+            if (line.isEmpty())
+                return null;
+            
+            String[] parts = line.split("\\s+", 5);
+            if (parts.length != 5)
+                return null;
+            
+            ProjectReport projectReport = new ProjectReport(project);
+            projectReport.usedInodes = Integer.parseInt(parts[1]);
+            projectReport.softLimitForInodes = Integer.parseInt(parts[2]);
+            projectReport.hardLimitForInodes = Integer.parseInt(parts[3]);
             return projectReport;
         }
     }
@@ -306,11 +336,36 @@ public class ProjectQuota
     private static Optional<ProjectReport> getReportForProject1(Project project) 
         throws InterruptedException, IOException
     {
-        // Get the quota report for blocks
-        final String quotaAsString = executeQuotaCommand(
-            String.format("quota -b -v -N -p %d", project.id()), null, project.mountpoint());
+        final Path mountpoint = project.mountpoint();
         
-        return Optional.ofNullable((new BlockQuotaLineParser(project)).apply(quotaAsString));
+        // Get the quota report for (1K) blocks
+        final String quotaForBlocksAsString = executeQuotaCommand(
+            String.format("quota -b -v -N -p %d", project.id()), null, mountpoint);
+        
+        ProjectReport report = (new QuotaForBlocksLineParser(project))
+            .apply(quotaForBlocksAsString);
+        if (report == null) {
+            // No report is returned: the project either doesn't exist or it is not set-up
+            return Optional.empty();
+        }
+        
+        //
+        // A report is for blocks is present: Try to enhance with information on inode usage
+        //
+        
+        // Get the quota report for inodes
+        final String quotaForInodesAsString = executeQuotaCommand(
+            String.format("quota -i -v -N -p %d", project.id()), null, mountpoint);
+        
+        ProjectReport reportForInodes = (new QuotaForInodesLineParser(project))
+            .apply(quotaForInodesAsString);
+        if (reportForInodes != null) {
+            report.usedInodes = reportForInodes.usedInodes;
+            report.softLimitForInodes = reportForInodes.softLimitForInodes;
+            report.hardLimitForInodes = reportForInodes.hardLimitForInodes;
+        }
+        
+        return Optional.of(report);
     }
     
     private static void setupProject1(Project project)
@@ -459,9 +514,9 @@ public class ProjectQuota
         // Note: We consider a project as set-up if it outputs a quota report of non-zero usage
         
         ProjectReport projectReport = getReportForProject1(project).orElse(null);
-        Validate.validState(projectReport == null || projectReport.getUsedSpace() != null, 
+        Validate.validState(projectReport == null || projectReport.getUsedBlocks() != null, 
             "The report is expected to have a non-null value for usedSpace");
-        if (projectReport == null || projectReport.getUsedSpace() == 0) {
+        if (projectReport == null || projectReport.getUsedBlocks() == 0) {
             setupProject1(project);
         }
     }

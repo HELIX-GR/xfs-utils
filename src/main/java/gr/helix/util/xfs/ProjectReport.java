@@ -1,5 +1,7 @@
 package gr.helix.util.xfs;
 
+import org.apache.commons.lang3.Validate;
+
 public class ProjectReport
 {
     private final Project project;
@@ -10,7 +12,7 @@ public class ProjectReport
      * <p>Note that a zero value may indicate either that the project is not set-up or that has 
      * it has not allocated a disk block (yet).
      */
-    private Integer usedSpace;
+    Integer usedBlocks;
     
     /**
      * The hard-limit for space (in 1K blocks).
@@ -18,13 +20,13 @@ public class ProjectReport
      * <p>A zero value may indicate either that the project is not set-up or that a limit
      * is not defined (yet).
      */
-    private Integer hardLimitForSpace;
+    Integer hardLimitForBlocks;
     
     /**
      * The soft-limit for space (in 1K blocks).
-     * <p>See note on zeros at {@link ProjectReport#hardLimitForSpace}
+     * <p>See note on zeros at {@link ProjectReport#hardLimitForBlocks}
      */
-    private Integer softLimitForSpace;
+    Integer softLimitForBlocks;
     
     /**
      * The number of inodes used (i.e the number of files).
@@ -32,24 +34,28 @@ public class ProjectReport
      * <p>A zero value indicates that the project is not set-up (otherwise at least 1 inode is 
      * used for the root directory of the project).
      */
-    private Integer usedInodes;
+    Integer usedInodes;
     
     /**
      * The hard-limit for the number of inodes (i.e the number of files).
      * 
-     * <p>See note on zeros at {@link ProjectReport#hardLimitForSpace}
+     * <p>See note on zeros at {@link ProjectReport#hardLimitForBlocks}
      */
-    private Integer hardLimitForInodes;
+    Integer hardLimitForInodes;
     
     /**
      * The soft-limit for the number of inodes (i.e the number of files).
      * 
-     * <p>See note on zeros at {@link ProjectReport#hardLimitForSpace}
+     * <p>See note on zeros at {@link ProjectReport#hardLimitForBlocks}
      */
-    private Integer softLimitForInodes;
+    Integer softLimitForInodes;
     
-    public ProjectReport(Project project)
+    /**
+     * A package-private constructor
+     */
+    ProjectReport(Project project)
     {
+        Validate.notNull(project);
         this.project = project;
     }
     
@@ -58,34 +64,34 @@ public class ProjectReport
         return project;
     }
 
-    public Integer getUsedSpace()
+    public Integer getUsedBlocks()
     {
-        return usedSpace;
+        return usedBlocks;
     }
 
-    public void setUsedSpace(Integer usedSpace)
+    public Long getUsedBytes()
     {
-        this.usedSpace = usedSpace;
+        return usedBlocks == null? null : (usedBlocks.longValue() * 1024L);
+    }
+    
+    public Integer getHardLimitForBlocks()
+    {
+        return hardLimitForBlocks;
+    }
+    
+    public Long getHardLimitForBytes()
+    {
+        return hardLimitForBlocks == null? null : (hardLimitForBlocks.longValue() * 1024L);
     }
 
-    public Integer getHardLimitForSpace()
+    public Integer getSoftLimitForBlocks()
     {
-        return hardLimitForSpace;
+        return softLimitForBlocks;
     }
-
-    public void setHardLimitForSpace(Integer hardLimitForSpace)
+    
+    public Long getSoftLimitForBytes()
     {
-        this.hardLimitForSpace = hardLimitForSpace;
-    }
-
-    public Integer getSoftLimitForSpace()
-    {
-        return softLimitForSpace;
-    }
-
-    public void setSoftLimitForSpace(Integer softLimitForSpace)
-    {
-        this.softLimitForSpace = softLimitForSpace;
+        return softLimitForBlocks == null? null : (softLimitForBlocks.longValue() * 1024L);
     }
 
     public Integer getUsedInodes()
@@ -98,19 +104,9 @@ public class ProjectReport
         return usedInodes;
     }
 
-    public void setUsedInodes(Integer usedInodes)
-    {
-        this.usedInodes = usedInodes;
-    }
-
     public Integer getHardLimitForInodes()
     {
         return hardLimitForInodes;
-    }
-
-    public void setHardLimitForInodes(Integer hardLimitForInodes)
-    {
-        this.hardLimitForInodes = hardLimitForInodes;
     }
 
     public Integer getSoftLimitForInodes()
@@ -118,16 +114,15 @@ public class ProjectReport
         return softLimitForInodes;
     }
 
-    public void setSoftLimitForInodes(Integer softLimitForInodes)
-    {
-        this.softLimitForInodes = softLimitForInodes;
-    }
-
     @Override
     public String toString()
     {
         return String.format(
-            "ProjectReport(project=#%d, used=%dK, hardLimit=%dK, softLimit=%dK)",
-            project.id(), usedSpace, hardLimitForSpace, softLimitForSpace);
+            "ProjectReport (project=#%d, " +
+                "usedBlocks=%s, hardLimitForBlocks=%s, softLimitForBlocks=%s, " +
+                "usedInodes=%s, hardLimitForInodes=%s, softLimitForInodes=%s)",
+            project.id(), 
+            usedBlocks, hardLimitForBlocks, softLimitForBlocks, 
+            usedInodes, hardLimitForInodes, softLimitForInodes);
     }
 }
