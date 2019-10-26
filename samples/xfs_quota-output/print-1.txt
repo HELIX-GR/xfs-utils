@@ -1,0 +1,6 @@
+Filesystem          Pathname
+/var/local          /dev/mapper/vg1-vol1 (uquota, pquota)
+/var/local/nfs/jupyter-c1/notebooks/users/drmalex07.develop@gmail.com /dev/mapper/vg1-vol1 (project 101, drmalex07_develop__at__gmail_com)
+/var/local/nfs/jupyter-c1/notebooks/users/drmalex07@gmail.com /dev/mapper/vg1-vol1 (project 102, drmalex07__at__gmail_com)
+/var/local/nfs/jupyter-c1/notebooks/users/tester@example.com /dev/mapper/vg1-vol1 (project 202, tester__at__example_com)
+/var/local/nfs/jupyter-c1/notebooks/users/tester1@example.com /dev/mapper/vg1-vol1 (project 1500, tester1__at__example_com)

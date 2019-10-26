@@ -58,6 +58,9 @@ public class ProjectQuota
     
     private static final long COMMAND_TIMEOUT_IN_SECONDS = 2; 
     
+    /**
+     * An interface for editing project definition files at <code>/etc/{projects,projid}</code>
+     */
     @FunctionalInterface
     private interface DefinitionEditor
     {
@@ -201,7 +204,7 @@ public class ProjectQuota
         return commandLine;
     }
     
-    private static Map<Integer, Path> loadProjectPaths() throws IOException
+    private static Map<Integer, Path> readPathsFromProjectDefinitions() throws IOException
     {
         return Files.lines(PROJECTS_FILE)
             .map(line -> line.split(":"))
@@ -210,7 +213,7 @@ public class ProjectQuota
             .collect(Collectors.toMap(Pair::getLeft, Pair::getRight, (u, v) -> u, LinkedHashMap::new));
     }
     
-    private static Map<Integer, String> loadProjectNames() throws IOException
+    private static Map<Integer, String> readNamesFromProjectDefinitions() throws IOException
     {
         return Files.lines(PROJID_FILE)
             .map(line -> line.split(":"))
@@ -254,8 +257,8 @@ public class ProjectQuota
         
         // Append a single definition to /etc/{projid,projects}
         
-        final Map<Integer, Path> projectPathById = loadProjectPaths();
-        final Map<Integer, String> projectNameById = loadProjectNames();
+        final Map<Integer, Path> projectPathById = readPathsFromProjectDefinitions();
+        final Map<Integer, String> projectNameById = readNamesFromProjectDefinitions();
         if (!projectPathById.keySet().equals(projectNameById.keySet())) {
             logger.warn("The project definition files are expected to hold the same set of project IDs!");
         }
@@ -287,8 +290,8 @@ public class ProjectQuota
         
         // Regenerate all definitions except of the one of the de-registered project
         
-        final Map<Integer, Path> projectPathById = loadProjectPaths();
-        final Map<Integer, String> projectNameById = loadProjectNames();
+        final Map<Integer, Path> projectPathById = readPathsFromProjectDefinitions();
+        final Map<Integer, String> projectNameById = readNamesFromProjectDefinitions();
         if (!projectPathById.keySet().equals(projectNameById.keySet())) {
             logger.warn("The project definition files are expected to hold the same set of project IDs!");
         }
@@ -409,6 +412,59 @@ public class ProjectQuota
         
         Validate.validState(getReportForProject1(project).isPresent(), 
             "The project %s is not setup! must set it up first before applying quota", project);
+    }
+    
+    /**
+     * Execute an <code>xfs_quota</code> command forking a child process and return its output as
+     * a string.
+     * 
+     * @param quotaCommand An <tt>xfs_quota</tt> command
+     * @param projectIdentifier A project identifier (numeric ID or name) to restrict the scope of the command. 
+     *    It may be <code>null</code>.
+     * @param mountpoint The mountpoint of the XFS filesystem
+     * @return the standard output of the command
+     * @throws InterruptedException
+     * @throws IOException
+     * 
+     * @see manpage for <code>xfs_quota</code>
+     */
+    private static String executeQuotaCommand(String quotaCommand, String projectIdentifier, Path mountpoint) 
+        throws InterruptedException, IOException
+    {
+        Process process = null;
+        
+        final List<String> command = 
+            new ArrayList<>(Arrays.asList("sudo", "xfs_quota", "-x", "-c", quotaCommand));
+        if (projectIdentifier != null) {
+            command.add("-d");
+            command.add(projectIdentifier.toString());
+        }
+        command.add(mountpoint.toString());
+            
+        final ProcessBuilder processBuilder = new ProcessBuilder(command)
+            .redirectErrorStream(false);
+        
+        process = processBuilder.start();
+        if (logger.isDebugEnabled()) {
+            logger.debug("Spawned process executing `{}`: {}", commandToString(command), process);
+        }
+        
+        final boolean finished = process.waitFor(COMMAND_TIMEOUT_IN_SECONDS, TimeUnit.SECONDS);
+        if (!finished) {
+            throw new IllegalStateException(
+                String.format("Timed out (%ds) waiting for `xfs_quota` command", COMMAND_TIMEOUT_IN_SECONDS));
+        }
+        
+        final int exitCode = process.exitValue();
+        logger.debug("Process {} exited with code {}", process, exitCode);
+        if (exitCode != 0) {
+            throw new IllegalStateException(
+                String.format("The `xfs_quota` command has failed: %s", quotaCommand));
+        }
+        
+        final String stdoutAsString = IOUtils.toString(process.getInputStream(), Charset.defaultCharset());
+        
+        return stdoutAsString;
     }
     
     /**
@@ -602,60 +658,7 @@ public class ProjectQuota
         checkProjectBeforeApplyingQuota(project);
         setQuotaForInodes1(project, softLimit, hardLimit);
     }
-    
-    /**
-     * Execute an <code>xfs_quota</code> command forking a child process and return its output as
-     * a string.
-     * 
-     * @param quotaCommand An <tt>xfs_quota</tt> command
-     * @param projectIdentifier A project identifier (numeric ID or name) to restrict the scope of the command. 
-     *    It may be <code>null</code>.
-     * @param mountpoint The mountpoint of the XFS filesystem
-     * @return the standard output of the command
-     * @throws InterruptedException
-     * @throws IOException
-     * 
-     * @see manpage for <code>xfs_quota</code>
-     */
-    private static String executeQuotaCommand(String quotaCommand, String projectIdentifier, Path mountpoint) 
-        throws InterruptedException, IOException
-    {
-        Process process = null;
         
-        final List<String> command = 
-            new ArrayList<>(Arrays.asList("sudo", "xfs_quota", "-x", "-c", quotaCommand));
-        if (projectIdentifier != null) {
-            command.add("-d");
-            command.add(projectIdentifier.toString());
-        }
-        command.add(mountpoint.toString());
-            
-        final ProcessBuilder processBuilder = new ProcessBuilder(command)
-            .redirectErrorStream(false);
-        
-        process = processBuilder.start();
-        if (logger.isDebugEnabled()) {
-            logger.debug("Spawned process executing `{}`: {}", commandToString(command), process);
-        }
-        
-        final boolean finished = process.waitFor(COMMAND_TIMEOUT_IN_SECONDS, TimeUnit.SECONDS);
-        if (!finished) {
-            throw new IllegalStateException(
-                String.format("Timed out (%ds) waiting for `xfs_quota` command", COMMAND_TIMEOUT_IN_SECONDS));
-        }
-        
-        final int exitCode = process.exitValue();
-        logger.debug("Process {} exited with code {}", process, exitCode);
-        if (exitCode != 0) {
-            throw new IllegalStateException(
-                String.format("The `xfs_quota` command has failed: %s", quotaCommand));
-        }
-        
-        final String stdoutAsString = IOUtils.toString(process.getInputStream(), Charset.defaultCharset());
-        
-        return stdoutAsString;
-    }
-    
     //
     // Tests
     //
