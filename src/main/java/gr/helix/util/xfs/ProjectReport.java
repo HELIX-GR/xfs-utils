@@ -99,7 +99,7 @@ public class ProjectReport
         return usedInodes;
     }
     
-    public Integer getNumberOfFiles()
+    public Integer getUsedNumberOfFiles()
     {
         return usedInodes;
     }
@@ -108,8 +108,18 @@ public class ProjectReport
     {
         return hardLimitForInodes;
     }
+    
+    public Integer getHardLimitForNumberOfFiles()
+    {
+        return hardLimitForInodes;
+    }
 
     public Integer getSoftLimitForInodes()
+    {
+        return softLimitForInodes;
+    }
+    
+    public Integer getSoftLimitForNumberOfFiles()
     {
         return softLimitForInodes;
     }
