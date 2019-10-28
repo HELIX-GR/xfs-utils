@@ -570,6 +570,8 @@ public class ProjectQuota
         Validate.isTrue(Files.isDirectory(path), 
             "The project\'s root directory does not exist (or is not a directory): %s", path);
         
+        logger.info("Setting up project: {}", projectToSetup);
+        
         // Register
         
         Project project = findProjectById(projectToSetup.id(), mountpoint).orElse(null);
@@ -612,6 +614,8 @@ public class ProjectQuota
         
         final Path mountpoint = projectToCleanup.mountpoint();
         Validate.validState(Files.isDirectory(mountpoint), "The mountpoint is not a directory!");
+        
+        logger.info("Clearing project: {}", projectToCleanup);
         
         // Cleanup
         
